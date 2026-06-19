@@ -1,5 +1,5 @@
 import type { AiAnalysisResponse } from './ai-prompt'
-import { FOOD_ANALYSIS_PROMPT } from './ai-prompt'
+import { FOOD_ANALYSIS_PROMPT, formatIngredientName } from './ai-prompt'
 import type { AiFoodDraft } from './types'
 
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -84,7 +84,7 @@ function mapAnalysisToDraft(raw: AiAnalysisResponse): AiFoodDraft {
     prep_description: String(raw.moTaSoCheChung ?? '').trim(),
     cutting_details: String(raw.chiTietCatThai?.noiDung ?? '').trim(),
     ingredients: raw.danhSachThanhPhan.map((item) => ({
-      material_name: String(item.ten ?? '').trim(),
+      material_name: formatIngredientName(item),
       estimated_quantity_text: String(item.soLuongUocTinh ?? '').trim(),
       quantity_grams: parseGramWeight(item.khoiLuongUocTinhGram),
     })),
@@ -127,7 +127,7 @@ async function analyzeWithOpenAI(mainImage: Blob): Promise<AiFoodDraft> {
           ],
         },
       ],
-      max_tokens: 3000,
+      max_tokens: 4096,
       response_format: { type: 'json_object' },
     }),
   })
