@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import FoodCard from '../components/FoodCard'
-import { isSupabaseConfigured } from '../lib/supabase'
-import { fetchFoods } from '../lib/supabase'
+import ImageCropper from '../components/ImageCropper'
+import ImageSourceButtons from '../components/ImageSourceButtons'
+import { useAddFood } from '../context/AddFoodContext'
+import { isSupabaseConfigured, fetchFoods } from '../lib/supabase'
 import type { Food } from '../lib/types'
 
 export default function HomePage() {
+  const navigate = useNavigate()
+  const { addImage, reset } = useAddFood()
   const [foods, setFoods] = useState<Food[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [rawSrc, setRawSrc] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!isSupabaseConfigured()) {
@@ -30,6 +35,33 @@ export default function HomePage() {
   useEffect(() => {
     load()
   }, [load])
+
+  function clearRawSrc() {
+    if (rawSrc) URL.revokeObjectURL(rawSrc)
+    setRawSrc(null)
+  }
+
+  function handleFileSelected(file: File) {
+    reset()
+    clearRawSrc()
+    setRawSrc(URL.createObjectURL(file))
+  }
+
+  function handleCropDone(blob: Blob) {
+    clearRawSrc()
+    addImage(blob)
+    navigate('/add/preview')
+  }
+
+  if (rawSrc) {
+    return (
+      <ImageCropper
+        imageSrc={rawSrc}
+        onConfirm={handleCropDone}
+        onCancel={clearRawSrc}
+      />
+    )
+  }
 
   return (
     <div className="flex flex-col pb-24">
@@ -53,9 +85,7 @@ export default function HomePage() {
       {!loading && !error && foods.length === 0 && (
         <div className="px-4 py-12 text-center">
           <p className="text-neutral-500">Chưa có set thực phẩm nào.</p>
-          <p className="mt-1 text-sm text-neutral-400">
-            Nhấn nút bên dưới để thêm mới.
-          </p>
+          <p className="mt-1 text-sm text-neutral-400">Chọn ảnh hoặc chụp ảnh bên dưới.</p>
         </div>
       )}
 
@@ -68,12 +98,7 @@ export default function HomePage() {
       </ul>
 
       <div className="fixed bottom-0 left-0 right-0 mx-auto max-w-lg border-t border-neutral-200 bg-white p-4">
-        <Link
-          to="/add"
-          className="flex w-full items-center justify-center rounded-xl bg-emerald-600 py-4 text-base font-semibold text-white shadow-lg active:bg-emerald-700"
-        >
-          + Thêm sản phẩm mới
-        </Link>
+        <ImageSourceButtons onFileSelected={handleFileSelected} />
       </div>
     </div>
   )

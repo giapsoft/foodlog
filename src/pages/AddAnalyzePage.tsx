@@ -39,7 +39,7 @@ export default function AddAnalyzePage() {
 
   useEffect(() => {
     if (images.length === 0) {
-      navigate('/add', { replace: true })
+      navigate('/', { replace: true })
       return
     }
 
