@@ -1,0 +1,184 @@
+import type { AiAnalysisResponse } from './ai-prompt'
+import { FOOD_ANALYSIS_PROMPT } from './ai-prompt'
+import type { AiFoodDraft } from './types'
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]!)
+  }
+  return btoa(binary)
+}
+
+function stripJsonMarkdown(text: string): string {
+  return text
+    .trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+}
+
+/** Parse "2-3 người", "2 người" → số nguyên ước lượng */
+export function parseServingCount(text: string): number {
+  const numbers = text.match(/\d+/g)?.map(Number) ?? []
+  if (numbers.length === 0) return 1
+  if (numbers.length === 1) return Math.max(1, numbers[0]!)
+  return Math.max(1, Math.round((numbers[0]! + numbers[numbers.length - 1]!) / 2))
+}
+
+function mapAnalysisToDraft(raw: AiAnalysisResponse): AiFoodDraft {
+  if (!raw.tenSet || !Array.isArray(raw.danhSachThanhPhan)) {
+    throw new Error('AI trả về dữ liệu không hợp lệ')
+  }
+
+  const servingText = String(raw.khauPhanAn ?? '').trim()
+
+  return {
+    name: String(raw.tenSet).trim(),
+    serving_size_text: servingText,
+    standard_servings: parseServingCount(servingText),
+    suggested_dish: String(raw.goiYMonAn ?? '').trim(),
+    prep_description: String(raw.moTaSoCheChung ?? '').trim(),
+    cutting_details: String(raw.chiTietCatThai?.noiDung ?? '').trim(),
+    ingredients: raw.danhSachThanhPhan.map((item) => ({
+      material_name: String(item.ten ?? '').trim(),
+      estimated_quantity_text: String(item.soLuongUocTinh ?? '').trim(),
+      quantity_grams: Math.max(0, Number(String(item.khoiLuongUocTinhGram).replace(/[^\d.]/g, '')) || 0),
+    })),
+  }
+}
+
+function parseAiJson(text: string): AiFoodDraft {
+  const parsed = JSON.parse(stripJsonMarkdown(text)) as AiAnalysisResponse
+  return mapAnalysisToDraft(parsed)
+}
+
+async function analyzeWithOpenAI(mainImage: Blob): Promise<AiFoodDraft> {
+  const apiKey = import.meta.env.VITE_OPENAI_API_KEY as string
+  const model = (import.meta.env.VITE_OPENAI_MODEL as string) || 'gpt-4o-mini'
+
+  if (!apiKey) {
+    throw new Error('Thiếu VITE_OPENAI_API_KEY')
+  }
+
+  const base64 = await blobToBase64(mainImage)
+  const mime = mainImage.type || 'image/jpeg'
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: FOOD_ANALYSIS_PROMPT },
+            {
+              type: 'image_url',
+              image_url: { url: `data:${mime};base64,${base64}` },
+            },
+          ],
+        },
+      ],
+      max_tokens: 3000,
+      response_format: { type: 'json_object' },
+    }),
+  })
+
+  if (!response.ok) {
+    const err = await response.text()
+    throw new Error(`OpenAI lỗi: ${response.status} ${err}`)
+  }
+
+  const data = await response.json()
+  const content = data.choices?.[0]?.message?.content as string
+  return parseAiJson(content)
+}
+
+async function analyzeWithGemini(mainImage: Blob): Promise<AiFoodDraft> {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string
+  const model = (import.meta.env.VITE_GEMINI_MODEL as string) || 'gemini-2.0-flash'
+
+  if (!apiKey) {
+    throw new Error('Thiếu VITE_GEMINI_API_KEY')
+  }
+
+  const base64 = await blobToBase64(mainImage)
+  const mime = mainImage.type || 'image/jpeg'
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { text: FOOD_ANALYSIS_PROMPT },
+            { inline_data: { mime_type: mime, data: base64 } },
+          ],
+        },
+      ],
+      generationConfig: { responseMimeType: 'application/json' },
+    }),
+  })
+
+  if (!response.ok) {
+    const err = await response.text()
+    throw new Error(`Gemini lỗi: ${response.status} ${err}`)
+  }
+
+  const data = await response.json()
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text as string
+  return parseAiJson(content)
+}
+
+export function isAiConfigured(): boolean {
+  const provider = (import.meta.env.VITE_AI_PROVIDER as string) || 'openai'
+  if (provider === 'gemini') {
+    return Boolean(import.meta.env.VITE_GEMINI_API_KEY)
+  }
+  return Boolean(import.meta.env.VITE_OPENAI_API_KEY)
+}
+
+export async function analyzeFoodImages(images: Blob[]): Promise<AiFoodDraft> {
+  if (images.length === 0) {
+    throw new Error('Cần ít nhất một ảnh để phân tích')
+  }
+
+  const provider = (import.meta.env.VITE_AI_PROVIDER as string) || 'openai'
+
+  if (provider === 'gemini') {
+    return analyzeWithGemini(images[0]!)
+  }
+  return analyzeWithOpenAI(images[0]!)
+}
+
+/** Fallback khi chưa cấu hình AI (dev/demo) */
+export function mockAiDraft(): AiFoodDraft {
+  return mapAnalysisToDraft({
+    tenSet: 'Set Rau Củ Sơ Chế Xào Thịt',
+    khauPhanAn: '2-3 người',
+    goiYMonAn: 'Su hào và Cà rốt xào thịt bò',
+    moTaSoCheChung:
+      'Các nguyên liệu đã được rửa sạch và sơ chế cắt thái sẵn. Su hào và cà rốt được xếp chung trong khay xốp chữ nhật, các loại rau thơm được đặt bên cạnh gọn gàng.',
+    chiTietCatThai: {
+      noiDung:
+        'Su hào được thái sợi chì (julienne) độ dày khoảng 3-4mm, chiều dài khoảng 6-7cm. Cà rốt cũng được thái sợi tương tự, trộn lẫn với su hào. Hành lá được cắt khúc dài khoảng 10-12cm. Ngò rí được giữ nguyên cọng dài. Ớt đỏ để nguyên trái.',
+    },
+    danhSachThanhPhan: [
+      { ten: 'Su hào (Củ dền)', soLuongUocTinh: 'Khoảng 1/2 củ lớn', khoiLuongUocTinhGram: '300' },
+      { ten: 'Cà rốt', soLuongUocTinh: 'Khoảng 1/3 củ', khoiLuongUocTinhGram: '100' },
+      { ten: 'Hành lá', soLuongUocTinh: '3-4 nhánh', khoiLuongUocTinhGram: '25' },
+      { ten: 'Ngò rí (Rau mùi)', soLuongUocTinh: '1 nắm nhỏ', khoiLuongUocTinhGram: '15' },
+      { ten: 'Ớt tươi hiểm', soLuongUocTinh: '2 trái', khoiLuongUocTinhGram: '10' },
+    ],
+  })
+}
