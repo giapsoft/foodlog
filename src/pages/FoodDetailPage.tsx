@@ -150,19 +150,6 @@ export default function FoodDetailPage() {
         )}
       </div>
 
-      {allImages.length > 0 && (
-        <div className="mt-3 flex gap-2 overflow-x-auto px-4 pb-2">
-          {allImages.map((url, i) => (
-            <img
-              key={`${url}-${i}`}
-              src={url}
-              alt=""
-              className="h-24 w-24 shrink-0 rounded-lg object-cover"
-            />
-          ))}
-        </div>
-      )}
-
       {error && (
         <p className="mx-4 mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -242,6 +229,29 @@ export default function FoodDetailPage() {
             </ul>
           </div>
         </div>
+      )}
+
+      {allImages.length > 0 && (
+        <section className="mt-6 border-t border-neutral-200 px-4 pt-6 pb-4">
+          <h3 className="mb-3 text-sm font-medium text-neutral-700">Ảnh</h3>
+          <div className="space-y-4">
+            {allImages.map((url, i) => (
+              <figure key={`${url}-${i}`} className="overflow-hidden rounded-xl bg-neutral-100">
+                {i === 0 && allImages.length > 1 && (
+                  <figcaption className="bg-neutral-800/80 px-3 py-1.5 text-xs font-medium text-white">
+                    Ảnh chính
+                  </figcaption>
+                )}
+                <img
+                  src={url}
+                  alt={i === 0 ? formData.name : `${formData.name} — ảnh ${i + 1}`}
+                  className="block w-full h-auto"
+                  loading="lazy"
+                />
+              </figure>
+            ))}
+          </div>
+        </section>
       )}
 
       <div className="fixed bottom-0 left-0 right-0 mx-auto max-w-lg space-y-2 border-t border-neutral-200 bg-white p-4">
