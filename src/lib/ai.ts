@@ -28,6 +28,47 @@ export function parseServingCount(text: string): number {
   return Math.max(1, Math.round((numbers[0]! + numbers[numbers.length - 1]!) / 2))
 }
 
+const MAX_GRAM_PER_INGREDIENT = 2000
+
+/**
+ * Parse khối lượng gram từ AI.
+ * Tránh lỗi "500-600" → strip hết → "500600".
+ */
+export function parseGramWeight(raw: unknown): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return clampGram(Math.round(raw))
+  }
+
+  const text = String(raw ?? '').trim().toLowerCase()
+  if (!text) return 0
+
+  const withoutUnit = text.replace(/\s*g(r(amm?)?)?\.?\s*$/i, '').trim()
+
+  const rangeMatch = withoutUnit.match(/^(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+(?:\.\d+)?)$/)
+  if (rangeMatch) {
+    const a = Number(rangeMatch[1]!)
+    const b = Number(rangeMatch[2]!)
+    return clampGram(Math.round((a + b) / 2))
+  }
+
+  const singleMatch = withoutUnit.match(/^(\d+(?:\.\d+)?)$/)
+  if (singleMatch) {
+    return clampGram(Math.round(Number(singleMatch[1]!)))
+  }
+
+  const firstNumber = withoutUnit.match(/(\d+(?:\.\d+)?)/)
+  if (firstNumber) {
+    return clampGram(Math.round(Number(firstNumber[1]!)))
+  }
+
+  return 0
+}
+
+function clampGram(grams: number): number {
+  if (!Number.isFinite(grams) || grams < 0) return 0
+  return Math.min(grams, MAX_GRAM_PER_INGREDIENT)
+}
+
 function mapAnalysisToDraft(raw: AiAnalysisResponse): AiFoodDraft {
   if (!raw.tenSet || !Array.isArray(raw.danhSachThanhPhan)) {
     throw new Error('AI trả về dữ liệu không hợp lệ')
@@ -45,7 +86,7 @@ function mapAnalysisToDraft(raw: AiAnalysisResponse): AiFoodDraft {
     ingredients: raw.danhSachThanhPhan.map((item) => ({
       material_name: String(item.ten ?? '').trim(),
       estimated_quantity_text: String(item.soLuongUocTinh ?? '').trim(),
-      quantity_grams: Math.max(0, Number(String(item.khoiLuongUocTinhGram).replace(/[^\d.]/g, '')) || 0),
+      quantity_grams: parseGramWeight(item.khoiLuongUocTinhGram),
     })),
   }
 }
@@ -153,6 +194,12 @@ export async function analyzeFoodImages(images: Blob[]): Promise<AiFoodDraft> {
     throw new Error('Cần ít nhất một ảnh để phân tích')
   }
 
+  if (!isAiConfigured()) {
+    throw new Error(
+      'Chưa cấu hình AI. Thêm VITE_AI_PROVIDER và API key tương ứng vào biến môi trường.',
+    )
+  }
+
   const provider = (import.meta.env.VITE_AI_PROVIDER as string) || 'openai'
 
   if (provider === 'gemini') {
@@ -161,24 +208,25 @@ export async function analyzeFoodImages(images: Blob[]): Promise<AiFoodDraft> {
   return analyzeWithOpenAI(images[0]!)
 }
 
-/** Fallback khi chưa cấu hình AI (dev/demo) */
-export function mockAiDraft(): AiFoodDraft {
-  return mapAnalysisToDraft({
-    tenSet: 'Set Rau Củ Sơ Chế Xào Thịt',
-    khauPhanAn: '2-3 người',
-    goiYMonAn: 'Su hào và Cà rốt xào thịt bò',
-    moTaSoCheChung:
-      'Các nguyên liệu đã được rửa sạch và sơ chế cắt thái sẵn. Su hào và cà rốt được xếp chung trong khay xốp chữ nhật, các loại rau thơm được đặt bên cạnh gọn gàng.',
-    chiTietCatThai: {
-      noiDung:
-        'Su hào được thái sợi chì (julienne) độ dày khoảng 3-4mm, chiều dài khoảng 6-7cm. Cà rốt cũng được thái sợi tương tự, trộn lẫn với su hào. Hành lá được cắt khúc dài khoảng 10-12cm. Ngò rí được giữ nguyên cọng dài. Ớt đỏ để nguyên trái.',
-    },
-    danhSachThanhPhan: [
-      { ten: 'Su hào (Củ dền)', soLuongUocTinh: 'Khoảng 1/2 củ lớn', khoiLuongUocTinhGram: '300' },
-      { ten: 'Cà rốt', soLuongUocTinh: 'Khoảng 1/3 củ', khoiLuongUocTinhGram: '100' },
-      { ten: 'Hành lá', soLuongUocTinh: '3-4 nhánh', khoiLuongUocTinhGram: '25' },
-      { ten: 'Ngò rí (Rau mùi)', soLuongUocTinh: '1 nắm nhỏ', khoiLuongUocTinhGram: '15' },
-      { ten: 'Ớt tươi hiểm', soLuongUocTinh: '2 trái', khoiLuongUocTinhGram: '10' },
-    ],
-  })
+/** Rút gọn message lỗi API cho dễ đọc trên mobile */
+export function formatAiError(error: unknown): string {
+  const msg = error instanceof Error ? error.message : 'Phân tích AI thất bại'
+  const jsonStart = msg.indexOf('{')
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(msg.slice(jsonStart)) as {
+        error?: { message?: string; code?: number }
+      }
+      const apiMsg = parsed.error?.message
+      if (apiMsg) {
+        const firstLine = apiMsg.split('\n')[0]!
+        const prefix = msg.includes('Gemini') ? 'Gemini' : msg.includes('OpenAI') ? 'OpenAI' : 'AI'
+        const code = parsed.error?.code ? ` (${parsed.error.code})` : ''
+        return `${prefix}${code}: ${firstLine}`
+      }
+    } catch {
+      /* giữ nguyên msg gốc */
+    }
+  }
+  return msg.length > 400 ? `${msg.slice(0, 400)}…` : msg
 }

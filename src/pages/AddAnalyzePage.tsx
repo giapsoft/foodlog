@@ -1,19 +1,41 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import FoodForm, { formToSaveInput } from '../components/FoodForm'
 import { useAddFood } from '../context/AddFoodContext'
-import { analyzeFoodImages, isAiConfigured, mockAiDraft } from '../lib/ai'
+import { analyzeFoodImages, formatAiError, isAiConfigured } from '../lib/ai'
 import { saveFood } from '../lib/supabase'
 import { uploadImages } from '../lib/storage'
 import type { FoodFormData } from '../lib/types'
 
-type Step = 'analyzing' | 'review' | 'saving'
+type Step = 'analyzing' | 'failed' | 'review' | 'saving'
 
 export default function AddAnalyzePage() {
   const navigate = useNavigate()
   const { images, formData, setFormData, initFormFromDraft, reset } = useAddFood()
   const [step, setStep] = useState<Step>('analyzing')
   const [error, setError] = useState<string | null>(null)
+
+  async function runAnalysis() {
+    setStep('analyzing')
+    setError(null)
+    setFormData(null)
+
+    try {
+      if (!isAiConfigured()) {
+        throw new Error(
+          'Chưa cấu hình AI. Thêm VITE_AI_PROVIDER và API key vào .env.local (hoặc GitHub Secrets khi deploy).',
+        )
+      }
+
+      const blobs = images.map((img) => img.blob)
+      const draft = await analyzeFoodImages(blobs)
+      initFormFromDraft(draft)
+      setStep('review')
+    } catch (e) {
+      setError(formatAiError(e))
+      setStep('failed')
+    }
+  }
 
   useEffect(() => {
     if (images.length === 0) {
@@ -26,32 +48,9 @@ export default function AddAnalyzePage() {
       return
     }
 
-    let cancelled = false
-
-    async function run() {
-      try {
-        const blobs = images.map((img) => img.blob)
-        const draft = isAiConfigured()
-          ? await analyzeFoodImages(blobs)
-          : mockAiDraft()
-
-        if (cancelled) return
-        initFormFromDraft(draft)
-        setStep('review')
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : 'Phân tích AI thất bại')
-          setStep('review')
-          initFormFromDraft(mockAiDraft())
-        }
-      }
-    }
-
-    run()
-    return () => {
-      cancelled = true
-    }
-  }, [images, formData, initFormFromDraft, navigate])
+    runAnalysis()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- chỉ chạy khi vào trang với ảnh mới
+  }, [images.length, navigate])
 
   async function handleSave(data: FoodFormData) {
     if (!data.name.trim()) {
@@ -88,11 +87,33 @@ export default function AddAnalyzePage() {
       <div className="flex flex-col items-center gap-4 px-4 py-16">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-200 border-t-emerald-600" />
         <p className="text-sm text-neutral-600">Đang phân tích ảnh bằng AI...</p>
-        {!isAiConfigured() && (
-          <p className="text-xs text-amber-600">
-            Chưa cấu hình AI — dùng dữ liệu mẫu để thử.
-          </p>
-        )}
+      </div>
+    )
+  }
+
+  if (step === 'failed') {
+    return (
+      <div className="flex flex-col gap-4 px-4 py-8">
+        <h2 className="text-lg font-bold text-neutral-800">Phân tích AI thất bại</h2>
+        <p className="rounded-lg bg-red-50 px-3 py-3 text-sm text-red-700">{error}</p>
+        <p className="text-sm text-neutral-500">
+          Không có dữ liệu tự điền. Vui lòng thử lại hoặc quay về bước trước.
+        </p>
+        <div className="flex flex-col gap-3 pt-2">
+          <button
+            type="button"
+            onClick={runAnalysis}
+            className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white"
+          >
+            Thử lại
+          </button>
+          <Link
+            to="/add/preview"
+            className="block w-full rounded-xl border border-neutral-300 py-3 text-center text-sm font-medium text-neutral-700"
+          >
+            ← Quay lại xem ảnh
+          </Link>
+        </div>
       </div>
     )
   }
