@@ -1,0 +1,7 @@
+@import 'tailwindcss';
+
+@layer base {
+  body {
+    @apply m-0 min-h-svh bg-neutral-50 font-sans text-neutral-900 antialiased;
+  }
+}
